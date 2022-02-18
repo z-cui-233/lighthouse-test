@@ -1,0 +1,67 @@
+name: lighthouse test
+
+on:
+  workflow_dispatch:
+    inputs: 
+      whatever:
+        description: "this option doesn't matter"
+        required: false 
+        type: boolean
+
+jobs:
+  lighthouse_audit:
+    # needs: deploy_dev
+    # if: github.ref == 'refs/heads/develop'
+    timeout-minutes: 30
+    runs-on: [self-hosted, cosmo]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Audit preview URL with Lighthouse
+        id: lighthouse_audit
+        uses: treosh/lighthouse-ci-action@v3
+        with:
+          urls: |
+            https://cosmo.wf.unext.dev/
+            https://cosmo-prod.wf.unext.dev/
+          uploadArtifacts: true
+          temporaryPublicStorage: true
+      - name: Format lighthouse score
+        id: format_lighthouse_score
+        uses: actions/github-script@v3
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const result = ${{ steps.lighthouse_audit.outputs.manifest }}[0].summary
+            const links = ${{ steps.lighthouse_audit.outputs.links }}
+            const formatResult = (res) => Math.round((res * 100))
+            Object.keys(result).forEach(key => result[key] = formatResult(result[key]))
+            const score = res => res >= 90 ? '🟢' : res >= 50 ? '🟠' : '🔴'
+            const comment = [
+                `⚡️ [Lighthouse report](${Object.values(links)[0]}) for the changes in this PR:`,
+                '| Category | Score |',
+                '| --- | --- |',
+                `| ${score(result.performance)} Performance | ${result.performance} |`,
+                `| ${score(result.accessibility)} Accessibility | ${result.accessibility} |`,
+                `| ${score(result['best-practices'])} Best practices | ${result['best-practices']} |`,
+                `| ${score(result.seo)} SEO | ${result.seo} |`,
+                `| ${score(result.pwa)} PWA | ${result.pwa} |`,
+                ' ',
+                `*Lighthouse ran on [${Object.keys(links)[0]}](${Object.keys(links)[0]})*`
+            ].join('\n')
+             core.setOutput("comment", comment);
+      - name: Slack Report
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: custom
+          fields: commit,repo,ref
+          custom_payload: |
+            {
+              attachments: [{
+                color: '${{ job.status }}' === 'success' ? 'good' : '${{ job.status }}' === 'failure' ? 'danger' : 'warning',
+                text: `${process.env.AS_JOB} (${process.env.AS_COMMIT}) of ${process.env.AS_REPO} by ${process.env.AS_AUTHOR} ${{ job.status }} in ${process.env.AS_TOOK}`,
+                title: `${{ steps.format_lighthouse_score.outputs.comment }}`
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.WNB_SLACK_WEBHOOK_URL }} 
